@@ -6,19 +6,19 @@
 
 extern crate nix;
 
-pub use nix::sys::eventfd::{EventFdFlag, EFD_CLOEXEC, EFD_NONBLOCK, EFD_SEMAPHORE};
+pub use nix::sys::eventfd::{EfdFlags, EFD_CLOEXEC, EFD_NONBLOCK, EFD_SEMAPHORE};
 use nix::sys::eventfd::eventfd;
 use nix::unistd::{dup, close, write, read};
 
 use std::io;
-use std::os::unix::io::{AsRawFd,RawFd};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::thread;
 use std::sync::mpsc;
 use std::mem;
 
 pub struct EventFD {
     fd: RawFd,
-    flags: EventFdFlag,
+    flags: EfdFlags,
 }
 
 unsafe impl Send for EventFD {}
@@ -30,8 +30,11 @@ impl EventFD {
     ///
     /// TODO: work out how to integrate this FD into the wider world
     /// of fds. There's currently no way to poll/select on the fd.
-    pub fn new(initval: usize, flags: EventFdFlag) -> io::Result<EventFD> {
-        Ok(EventFD { fd: try!(eventfd(initval, flags)), flags: flags })
+    pub fn new(initval: u32, flags: EfdFlags) -> io::Result<EventFD> {
+        Ok(EventFD {
+            fd: try!(eventfd(initval, flags)),
+            flags: flags,
+        })
     }
 
     /// Read the current value of the eventfd. This will block until
@@ -70,10 +73,12 @@ impl EventFD {
         thread::spawn(move || {
             loop {
                 match c.read() {
-                    Ok(v) => match tx.send(v) {
-                        Ok(_) => (),
-                        Err(_) => break,
-                    },
+                    Ok(v) => {
+                        match tx.send(v) {
+                            Ok(_) => (),
+                            Err(_) => break,
+                        }
+                    }
                     Err(e) => panic!("read failed: {}", e),
                 }
             }
@@ -102,20 +107,23 @@ impl Drop for EventFD {
 /// indistinguishable from the original.
 impl Clone for EventFD {
     fn clone(&self) -> EventFD {
-        EventFD { fd: dup(self.fd).unwrap(), flags: self.flags }
+        EventFD {
+            fd: dup(self.fd).unwrap(),
+            flags: self.flags,
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
     extern crate std;
-    use super::{EventFdFlag, EventFD, EFD_SEMAPHORE, EFD_NONBLOCK};
+    use super::{EfdFlags, EventFD, EFD_SEMAPHORE, EFD_NONBLOCK};
     use std::thread;
 
     #[test]
     fn test_basic() {
-        let (tx,rx) = std::sync::mpsc::channel();
-        let efd = match EventFD::new(10, EventFdFlag::empty()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let efd = match EventFD::new(10, EfdFlags::empty()) {
             Err(e) => panic!("new failed {}", e),
             Ok(fd) => fd,
         };
@@ -181,8 +189,8 @@ mod test {
 
     #[test]
     fn test_chan() {
-        let (tx,rx) = std::sync::mpsc::channel();
-        let efd = match EventFD::new(10, EventFdFlag::empty()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let efd = match EventFD::new(10, EfdFlags::empty()) {
             Err(e) => panic!("new failed {}", e),
             Ok(fd) => fd,
         };
@@ -191,9 +199,10 @@ mod test {
         assert!(tx.send(efd).is_ok());
 
         let t = thread::spawn(move || {
-            let efd = rx.recv().unwrap();
-            assert_eq!(efd.read().unwrap(), 11)
-        }).join();
+                let efd = rx.recv().unwrap();
+                assert_eq!(efd.read().unwrap(), 11)
+            })
+            .join();
 
         match t {
             Ok(_) => println!("ok"),
